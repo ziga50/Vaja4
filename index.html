@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+
+    <!-- Leaflet CSS -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.5.1/dist/leaflet.css"
+      integrity="sha512-xwE/Az9zrjBIphAcBb3F6JVqxf46+CDLwfLMHloNu6KEQCAWi6HcDUbeOfBIptF7tcCzusKFjFw2yuvEpDL9wQ=="
+      crossorigin=""
+    />
+
+    <!-- Leaflet JS -->
+    <script
+      src="https://unpkg.com/leaflet@1.5.1/dist/leaflet.js"
+      integrity="sha512-GffPMF3RvMeYyc1LWMHtK8EbPv0iNZ8/oTtHPx9/cc2ILxQ+u905qIwdpULaqDkyBKgOaB57QTMg7ztg8Jm2Og=="
+      crossorigin=""
+    ></script>
+
+    <title>Število kmetijskih gospodarstev po občinah</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <style>
+      body { margin: 0; padding: 0; }
+      #map { height: 100vh; width: 100%; }
+
+      .legend {
+        line-height: 18px;
+        color: #333;
+        background: white;
+        padding: 10px 12px;
+        border-radius: 6px;
+        box-shadow: 0 1px 5px rgba(0,0,0,0.25);
+        font: 14px/16px Arial, Helvetica, sans-serif;
+      }
+      .legend i {
+        width: 14px;
+        height: 14px;
+        float: left;
+        margin-right: 8px;
+        opacity: 0.9;
+        border: 1px solid #666;
+      }
+      .legend .title {
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="map"></div>
+
+    <script>
+      // ---- Basic map ----
+      var map = L.map("map").setView([28.3949, 84.124], 7);
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }).addTo(map);
+
+      // ---- Jenks (Natural Breaks) implementation (JS) ----
+      // Source idea: classic Jenks dynamic programming approach
+      function jenks(data, nClasses) {
+        data = data.slice().sort(function(a,b){ return a-b; });
+
+        var matrices = (function() {
+          var lower = [], vari = [];
+          for (var i=0; i<data.length+1; i++) {
+            lower.push(new Array(nClasses+1).fill(0));
+            vari.push(new Array(nClasses+1).fill(0));
+          }
+          for (var j=1; j<=nClasses; j++) {
+            lower[1][j] = 1;
+            vari[1][j] = 0;
+            for (var i=2; i<=data.length; i++) vari[i][j] = Infinity;
+          }
+
+          var s1=0, s2=0, w=0, v=0;
+
+          for (var l=2; l<=data.length; l++) {
+            s1 = s2 = w = 0;
+            for (var m=1; m<=l; m++) {
+              var i3 = l - m + 1;
+              var val = data[i3-1];
+              s2 += val * val;
+              s1 += val;
+              w += 1;
+              v = s2 - (s1*s1)/w;
+              var i4 = i3 - 1;
+              if (i4 !== 0) {
+                for (var j=2; j<=nClasses; j++) {
+                  if (vari[l][j] >= (v + vari[i4][j-1])) {
+                    lower[l][j] = i3;
+                    vari[l][j] = v + vari[i4][j-1];
+                  }
+                }
+              }
+            }
+            lower[l][1] = 1;
+            vari[l][1] = v;
+          }
+          return {lower: lower, vari: vari};
+        })();
+
+        // breaks
+        var k = data.length;
+        var kclass = new Array(nClasses+1).fill(0);
+        kclass[nClasses] = data[data.length-1];
+        kclass[0] = data[0];
+
+        for (var count = nClasses; count > 1; count--) {
+          var id = Math.floor(matrices.lower[k][count]) - 2;
+          kclass[count-1] = data[id];
+          k = Math.floor(matrices.lower[k][count] - 1);
+        }
+        return kclass; // length nClasses+1
+      }
+
+      // ---- Colors for classes (5 classes) ----
+      // (prosto zamenjaj, če želiš)
+      var classColors = ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"];
+
+      function getClassIndex(value, breaks) {
+        // breaks: [min, b1, b2, b3, b4, max] for 5 classes => length 6
+        for (var i = 0; i < breaks.length - 1; i++) {
+          if (value >= breaks[i] && value <= breaks[i+1]) return i;
+        }
+        return breaks.length - 2;
+      }
+
+      // ---- Load GeoJSON ----
+      // >>> TUKAJ spremeni pot: da je v izvorni mapi daj npr. "./nepal_provinces.json"
+      // (če je še vedno v /data, pusti "./data/nepal_provinces.json")
+      var geojsonPath = "./obcine_tot_agrh_wgs.json";
+
+      fetch(geojsonPath)
+        .then((response) => response.json())
+        .then((data) => {
+          // collect SIFRA values
+          var values = [];
+          data.features.forEach(function(f) {
+            var v = Number(f.properties.SIFRA);
+            if (!Number.isNaN(v)) values.push(v);
+          });
+
+          // Natural breaks (Jenks) – 5 razredov (po želji spremeni)
+          var nClasses = 5;
+          var breaks = jenks(values, nClasses);
+
+          function style(feature) {
+            var v = Number(feature.properties.tot_agrh);
+            var idx = getClassIndex(v, breaks);
+            return {
+              color: "black",
+              weight: 2,
+              fillOpacity: 0.6,
+              fillColor: classColors[idx]
+            };
+          }
+
+          function highlightFeature(e) {
+            var layer = e.target;
+            layer.setStyle({
+              weight: 3,
+              color: "black",
+              fillOpacity: 0.8,
+              fillColor: "yellow" // hover rumena
+            });
+            if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
+              layer.bringToFront();
+            }
+          }
+
+          function resetHighlight(e) {
+            geojsonLayer.resetStyle(e.target);
+          }
+
+          function onEachFeature(feature, layer) {
+            // popup: samo NAZIV
+            layer.bindPopup(String(feature.properties.NAZIV ?? ""));
+
+            layer.on({
+              mouseover: highlightFeature,
+              mouseout: resetHighlight,
+              click: function(e){ layer.openPopup(); }
+            });
+          }
+
+          var geojsonLayer = L.geoJSON(data, {
+            style: style,
+            onEachFeature: onEachFeature
+          }).addTo(map);
+
+          map.fitBounds(geojsonLayer.getBounds());
+
+          // ---- Legend ----
+          var legend = L.control({ position: "bottomright" });
+
+          legend.onAdd = function(map) {
+            var div = L.DomUtil.create("div", "legend");
+            div.innerHTML = '<div class="title">Število kmetijskih gospodarstev (Natural breaks)</div>';
+
+            for (var i = 0; i < breaks.length - 1; i++) {
+              var from = breaks[i];
+              var to = breaks[i + 1];
+              var label = `${from.toFixed(0)} – ${to.toFixed(0)}`;
+
+              div.innerHTML +=
+                '<div><i style="background:' + classColors[i] + '"></i>' +
+                label + '</div>';
+            }
+            return div;
+          };
+
+          legend.addTo(map);
+        })
+        .catch((err) => {
+          console.error("Napaka pri nalaganju GeoJSON:", err);
+          alert("Ne morem naložiti GeoJSON. Preveri pot in GitHub Pages.");
+        });
+    </script>
+  </body>
+</html>
