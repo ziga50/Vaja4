@@ -133,22 +133,20 @@
         return breaks.length - 2;
       }
 
-      // ---- Load GeoJSON ----
-      // >>> TUKAJ spremeni pot: da je v izvorni mapi daj npr. "./nepal_provinces.json"
-      // (če je še vedno v /data, pusti "./data/nepal_provinces.json")
+      // ---- Load GeoJSON ---
       var geojsonPath = "./obcine_tot_agrh_wgs.json";
 
       fetch(geojsonPath)
         .then((response) => response.json())
         .then((data) => {
-          // collect SIFRA values
+          // pridobimo vrednosti iz tot_agrh
           var values = [];
           data.features.forEach(function(f) {
-            var v = Number(f.properties.SIFRA);
+            var v = Number(f.properties.tot_agrh);
             if (!Number.isNaN(v)) values.push(v);
           });
 
-          // Natural breaks (Jenks) – 5 razredov (po želji spremeni)
+          // Natural breaks (Jenks) – 5 razredov 
           var nClasses = 5;
           var breaks = jenks(values, nClasses);
 
@@ -181,15 +179,23 @@
           }
 
           function onEachFeature(feature, layer) {
-            // popup: samo NAZIV
-            layer.bindPopup(String(feature.properties.NAZIV ?? ""));
+  const naziv = feature.properties.NAZIV ?? "";
+  const totAgrh = feature.properties.tot_agrh ?? "";
 
-            layer.on({
-              mouseover: highlightFeature,
-              mouseout: resetHighlight,
-              click: function(e){ layer.openPopup(); }
-            });
-          }
+  layer.bindPopup(
+    `<strong>${naziv}</strong><br>
+     tot_agrh: ${totAgrh}`
+  );
+
+  layer.on({
+    mouseover: highlightFeature,
+    mouseout: resetHighlight,
+    click: function (e) {
+      layer.openPopup();
+    }
+  });
+}
+
 
           var geojsonLayer = L.geoJSON(data, {
             style: style,
